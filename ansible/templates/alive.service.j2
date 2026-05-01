@@ -1,0 +1,17 @@
+[Unit]
+Description=NSO Assignment 2 alive.py (node availability checker)
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/nso
+Environment=FLASK_APP=alive.py
+Environment=FLASK_RUN_HOST=0.0.0.0
+Environment=FLASK_RUN_PORT=8080
+ExecStart=/usr/bin/flask run
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

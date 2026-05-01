@@ -1,0 +1,17 @@
+[Unit]
+Description=NSO Assignment 2 service.py
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/opt/nso
+Environment=FLASK_APP=service.py
+Environment=FLASK_RUN_HOST=0.0.0.0
+Environment=FLASK_RUN_PORT=5000
+ExecStart=/usr/bin/flask run
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
