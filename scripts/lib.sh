@@ -33,7 +33,14 @@ log() {
 }
 
 # --- source openrc -----------------------------------------------------
+# If OS_PASSWORD is already set in the environment (i.e. the user sourced
+# the openrc in their shell already), reuse it. Otherwise source the file,
+# which will prompt the user once.
 source_openrc() {
+    if [ -n "${OS_PASSWORD:-}" ] && [ -n "${OS_AUTH_URL:-}" ]; then
+        log "OpenStack credentials already in environment — reusing them"
+        return 0
+    fi
     log "Sourcing openrc: $OPENRC"
     set +u
     # shellcheck disable=SC1090
@@ -41,6 +48,10 @@ source_openrc() {
     set -u
     if [ -z "${OS_AUTH_URL:-}" ] || [ -z "${OS_USERNAME:-}" ]; then
         echo "openrc did not set OS_AUTH_URL / OS_USERNAME" >&2
+        exit 1
+    fi
+    if [ -z "${OS_PASSWORD:-}" ]; then
+        echo "OS_PASSWORD is empty after sourcing openrc — did you type it?" >&2
         exit 1
     fi
 }
