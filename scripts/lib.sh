@@ -3,8 +3,6 @@
 # This file is sourced, not executed.
 
 # --- argument parsing ---------------------------------------------------
-# Usage: parse_args "$@"
-# Sets globals: OPENRC, TAG, SSH_KEY (absolute paths)
 parse_args() {
     if [ $# -ne 3 ]; then
         echo "Usage: $0 <openrc> <tag> <ssh_key>" >&2
@@ -33,9 +31,6 @@ log() {
 }
 
 # --- source openrc -----------------------------------------------------
-# If OS_PASSWORD is already set in the environment (i.e. the user sourced
-# the openrc in their shell already), reuse it. Otherwise source the file,
-# which will prompt the user once.
 source_openrc() {
     if [ -n "${OS_PASSWORD:-}" ] && [ -n "${OS_AUTH_URL:-}" ]; then
         log "OpenStack credentials already in environment — reusing them"
@@ -57,14 +52,9 @@ source_openrc() {
 }
 
 # --- ensure two floating IPs (reuse if possible) -----------------------
-# Echoes 2 floating IP addresses on stdout (one per line).
-# All other output goes to stderr.
-# Newly-allocated FIPs are tagged with $TAG so cleanup can find them.
 ensure_two_floating_ips() {
     local pool="${1:-External}"
 
-    # List existing FIPs that are NOT associated with anything.
-    # Output format from openstack: "<addr> None" if unassigned.
     local unused
     unused=$(openstack floating ip list -f value -c "Floating IP Address" -c "Port" \
              | awk '$2 == "None" {print $1}')
@@ -96,7 +86,8 @@ read_desired_count() {
 }
 
 # --- generate ansible/inventory.ini and SSH config from terraform output -
-# Call after terraform apply has succeeded.
+# All hosts get ansible_ssh_common_args inline so we don't depend on
+# ~/.ssh/config (which may have entries from prior projects).
 generate_inventory_and_sshconfig() {
     local proxy_pub="$1"
     local bastion_pub="$2"
@@ -107,6 +98,10 @@ generate_inventory_and_sshconfig() {
 
     local ssh_config="$PROJECT_ROOT/${TAG}_SSHconfig"
     local inventory="$ANSIBLE_DIR/inventory.ini"
+
+    # The ProxyCommand string used for proxy + nodes (private hosts).
+    local jump="-o ProxyCommand='ssh -F none -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i ${SSH_KEY} -W %h:%p ubuntu@${bastion_pub}'"
+    local common="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
 
     log "Writing SSH config to $ssh_config"
     {
@@ -131,7 +126,7 @@ generate_inventory_and_sshconfig() {
         echo
 
         local privs names
-        privs=$(echo "$node_priv_json" | python3 -c 'import json,sys;print("\n".join(json.load(sys.stdin)))')
+        privs=$(echo "$node_priv_json"  | python3 -c 'import json,sys;print("\n".join(json.load(sys.stdin)))')
         names=$(echo "$node_names_json" | python3 -c 'import json,sys;print("\n".join(json.load(sys.stdin)))')
 
         paste <(echo "$names") <(echo "$privs") | while IFS=$'\t' read -r name ip; do
@@ -151,23 +146,24 @@ generate_inventory_and_sshconfig() {
     log "Writing Ansible inventory to $inventory"
     {
         echo "[bastion]"
-        echo "${TAG}_bastion ansible_host=$bastion_pub"
+        echo "${TAG}_bastion ansible_host=${bastion_pub} ansible_ssh_common_args=\"${common}\""
         echo
         echo "[proxy]"
-        echo "${TAG}_proxy ansible_host=$proxy_priv"
+        echo "${TAG}_proxy ansible_host=${proxy_priv} ansible_ssh_common_args=\"${common} ${jump}\""
         echo
         echo "[nodes]"
+
         local privs names
-        privs=$(echo "$node_priv_json" | python3 -c 'import json,sys;print("\n".join(json.load(sys.stdin)))')
+        privs=$(echo "$node_priv_json"  | python3 -c 'import json,sys;print("\n".join(json.load(sys.stdin)))')
         names=$(echo "$node_names_json" | python3 -c 'import json,sys;print("\n".join(json.load(sys.stdin)))')
+
         paste <(echo "$names") <(echo "$privs") | while IFS=$'\t' read -r name ip; do
             [ -z "$name" ] && continue
-            echo "$name ansible_host=$ip"
+            echo "${name} ansible_host=${ip} ansible_ssh_common_args=\"${common} ${jump}\""
         done
         echo
         echo "[all:vars]"
         echo "ansible_user=ubuntu"
         echo "ansible_ssh_private_key_file=$SSH_KEY"
-        echo "ansible_ssh_common_args='-F $ssh_config'"
     } > "$inventory"
 }

@@ -16,6 +16,13 @@
       command: cloud-init status --wait
       changed_when: false
 
+    - name: Wait for unattended-upgrades to release the apt lock
+      shell: |
+        while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1            || fuser /var/lib/apt/lists/lock >/dev/null 2>&1; do
+          sleep 2
+        done
+      changed_when: false
+
     - name: Install base packages
       apt:
         name:
@@ -24,6 +31,7 @@
           - python3-flask
         state: present
         update_cache: true
+        lock_timeout: 300
 
     - name: Create /opt/nso working directory
       file:
@@ -42,6 +50,7 @@
       apt:
         name: snmpd
         state: present
+        lock_timeout: 300
 
     - name: Copy service.py from local repo
       copy:
@@ -94,6 +103,7 @@
       apt:
         name: haproxy
         state: present
+        lock_timeout: 300
 
     - name: Render HAProxy config
       template:
@@ -157,7 +167,6 @@
       pip:
         name: ping3
         executable: pip3
-        break_system_packages: true
 
     - name: Copy alive.py from local repo
       copy:

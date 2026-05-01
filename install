@@ -22,12 +22,26 @@ log "Starting deployment of '$TAG'"
 NODE_COUNT=$(read_desired_count)
 log "servers.conf says we need $NODE_COUNT node(s)"
 
-log "Checking floating IPs"
-mapfile -t FIPS < <(ensure_two_floating_ips "External")
-PROXY_FIP="${FIPS[0]}"
-BASTION_FIP="${FIPS[1]}"
-log "Using proxy FIP:   $PROXY_FIP"
-log "Using bastion FIP: $BASTION_FIP"
+# If terraform state already has FIPs from a previous install run, reuse them.
+# Otherwise, query OpenStack for unassigned FIPs and allocate new ones if needed.
+PROXY_FIP=""
+BASTION_FIP=""
+if [ -f "$TF_DIR/terraform.tfstate" ]; then
+    PROXY_FIP=$(cd "$TF_DIR" && terraform output -raw proxy_public_ip 2>/dev/null || true)
+    BASTION_FIP=$(cd "$TF_DIR" && terraform output -raw bastion_public_ip 2>/dev/null || true)
+fi
+
+if [ -n "$PROXY_FIP" ] && [ -n "$BASTION_FIP" ] \
+   && [ "$PROXY_FIP" != "0.0.0.0" ] && [ "$BASTION_FIP" != "0.0.0.0" ]; then
+    log "Reusing FIPs from previous deployment: proxy=$PROXY_FIP bastion=$BASTION_FIP"
+else
+    log "Checking floating IPs"
+    mapfile -t FIPS < <(ensure_two_floating_ips "External")
+    PROXY_FIP="${FIPS[0]}"
+    BASTION_FIP="${FIPS[1]}"
+    log "Using proxy FIP:   $PROXY_FIP"
+    log "Using bastion FIP: $BASTION_FIP"
+fi
 
 cd "$TF_DIR"
 
@@ -57,17 +71,24 @@ generate_inventory_and_sshconfig \
     "$PROXY_IP" "$BASTION_IP" "$PROXY_PRIV" "$BASTION_PRIV" \
     "$NODE_PRIV_JSON" "$NODE_NAMES_JSON"
 
-# --- wait for SSH to come up via the bastion -------------------------
-log "Waiting for VMs to become SSH-reachable (max 5 min)"
+# --- wait for SSH on every host -------------------------------------
+log "Waiting for VMs to become SSH-reachable (max 8 min)"
 SSH_CONFIG="$PROJECT_ROOT/${TAG}_SSHconfig"
-deadline=$(( $(date +%s) + 300 ))
-while [ "$(date +%s)" -lt "$deadline" ]; do
-    if ssh -F "$SSH_CONFIG" -o ConnectTimeout=5 -o BatchMode=yes \
-           "${TAG}_bastion" 'echo ok' >/dev/null 2>&1; then
-        log "Bastion is reachable"
-        break
-    fi
-    sleep 5
+
+# Build the host list from the SSH config (all "Host xxx" entries).
+HOSTS=$(awk '/^Host / && $2 != "*" {print $2}' "$SSH_CONFIG")
+
+deadline=$(( $(date +%s) + 480 ))
+for host in $HOSTS; do
+    log "  Waiting for $host"
+    while [ "$(date +%s)" -lt "$deadline" ]; do
+        if ssh -F "$SSH_CONFIG" -o ConnectTimeout=5 -o BatchMode=yes \
+               "$host" 'echo ok' >/dev/null 2>&1; then
+            log "    $host is reachable"
+            break
+        fi
+        sleep 5
+    done
 done
 
 # --- run the playbook ------------------------------------------------
