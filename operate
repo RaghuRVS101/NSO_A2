@@ -1,0 +1,31 @@
+#!/bin/bash
+# operate <openrc> <tag> <ssh_key>
+#
+# Loops until Ctrl-C:
+#   - read servers.conf -> desired count
+#   - count current nodes (filtered by tag)
+#   - if mismatch, terraform apply with new count + re-run playbook
+#   - sleep 30s
+
+set -euo pipefail
+
+# shellcheck disable=SC1091
+source "$(dirname "$0")/scripts/lib.sh"
+
+parse_args "$@"
+locate_project_root
+source_openrc
+
+if [ ! -f "$TF_DIR/terraform.tfstate" ]; then
+    echo "No terraform state found at $TF_DIR/terraform.tfstate" >&2
+    echo "Run install first." >&2
+    exit 1
+fi
+
+log "Starting operate loop for '$TAG' (Ctrl-C to stop)"
+
+exec python3 "$SCRIPTS_DIR/operate.py" \
+    --openrc "$OPENRC" \
+    --tag "$TAG" \
+    --ssh-key "$SSH_KEY" \
+    --project-root "$PROJECT_ROOT"

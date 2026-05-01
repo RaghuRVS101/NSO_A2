@@ -1,0 +1,60 @@
+#!/bin/bash
+# cleanup <openrc> <tag> <ssh_key>
+#
+# 1. terraform destroy — releases VMs, network, router, secgroups, keypair.
+# 2. Delete any floating IPs tagged with our tag.
+# 3. Remove generated config files.
+
+set -euo pipefail
+
+# shellcheck disable=SC1091
+source "$(dirname "$0")/scripts/lib.sh"
+
+parse_args "$@"
+locate_project_root
+source_openrc
+
+log "Starting cleanup of '$TAG'"
+
+cd "$TF_DIR"
+
+if [ ! -f "terraform.tfstate" ]; then
+    log "No terraform state found — nothing to destroy from Terraform"
+else
+    PROXY_FIP=$(terraform output -raw proxy_public_ip 2>/dev/null || echo "0.0.0.0")
+    BASTION_FIP=$(terraform output -raw bastion_public_ip 2>/dev/null || echo "0.0.0.0")
+    NODE_COUNT=$(terraform output -json node_private_ips 2>/dev/null \
+                 | python3 -c 'import json,sys;print(len(json.load(sys.stdin)))' \
+                 || echo 0)
+
+    log "Running terraform destroy"
+    terraform destroy -auto-approve -input=false \
+        -var "tag=$TAG" \
+        -var "ssh_public_key=${SSH_KEY}.pub" \
+        -var "node_count=$NODE_COUNT" \
+        -var "proxy_floating_ip=$PROXY_FIP" \
+        -var "bastion_floating_ip=$BASTION_FIP"
+fi
+
+cd "$PROJECT_ROOT"
+
+# --- release tagged floating IPs --------------------------------------
+log "Releasing floating IPs tagged '$TAG'"
+TAGGED_FIPS=$(openstack floating ip list --tags "$TAG" \
+              -f value -c "Floating IP Address" 2>/dev/null || true)
+if [ -n "$TAGGED_FIPS" ]; then
+    while IFS= read -r ip; do
+        [ -z "$ip" ] && continue
+        log "  Deleting $ip"
+        openstack floating ip delete "$ip" || true
+    done <<< "$TAGGED_FIPS"
+else
+    log "  No tagged FIPs to release"
+fi
+
+# --- remove generated files -------------------------------------------
+log "Removing generated config files"
+rm -f "$PROJECT_ROOT/${TAG}_SSHconfig"
+rm -f "$ANSIBLE_DIR/inventory.ini"
+
+log "Cleanup complete"
