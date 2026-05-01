@@ -1,0 +1,27 @@
+# Secrets
+*openrc*
+*.pem
+id_rsa*
+
+# Terraform
+.terraform/
+.terraform.lock.hcl
+terraform.tfstate
+terraform.tfstate.backup
+*.tfvars
+crash.log
+
+# Generated config
+*_SSHconfig
+ansible/inventory.ini
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Editor
+.vscode/
+.idea/
+*.swp
