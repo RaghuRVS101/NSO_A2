@@ -7,6 +7,7 @@ Runs forever (until Ctrl-C). Every 30 seconds:
   2. Counts VMs in OpenStack tagged with TAG and "node" -> actual count A.
   3. If D != A:
        - re-runs `terraform apply` with new node_count
+       - waits for SSH to come up on every host
        - re-runs the Ansible playbook so HAProxy + alive nodes.yaml refresh
        - sends a few requests to the proxy to validate
 """
@@ -60,15 +61,42 @@ def count_actual_nodes(conn, tag: str) -> int:
 
 
 def terraform_output(tf_dir: str, name: str) -> str:
-    p = run(["terraform", "output", "-raw", name],
-            cwd=tf_dir, capture=True)
+    p = run(["terraform", "output", "-raw", name], cwd=tf_dir, capture=True)
     return p.stdout.strip()
 
 
 def terraform_output_json(tf_dir: str, name: str):
-    p = run(["terraform", "output", "-json", name],
-            cwd=tf_dir, capture=True)
+    p = run(["terraform", "output", "-json", name], cwd=tf_dir, capture=True)
     return json.loads(p.stdout)
+
+
+def wait_for_ssh(project_root: str, tag: str, max_seconds: int = 300) -> None:
+    """Block until every host in the SSH config accepts an SSH connection."""
+    ssh_config = os.path.join(project_root, f"{tag}_SSHconfig")
+    deadline = time.time() + max_seconds
+
+    hosts = []
+    with open(ssh_config) as f:
+        for ln in f:
+            ln = ln.strip()
+            if ln.startswith("Host ") and "*" not in ln:
+                hosts.append(ln.split()[1])
+
+    for h in hosts:
+        log(f"  Waiting for SSH on {h}")
+        while time.time() < deadline:
+            try:
+                subprocess.run(
+                    ["ssh", "-F", ssh_config, "-o", "ConnectTimeout=5",
+                     "-o", "BatchMode=yes", h, "echo ok"],
+                    check=True, capture_output=True, timeout=10,
+                )
+                log(f"    {h} is reachable")
+                break
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+                time.sleep(5)
+        else:
+            log(f"    {h} did NOT come up in time — proceeding anyway")
 
 
 def reconcile(args, conn, desired: int) -> None:
@@ -102,12 +130,14 @@ TAG="{args.tag}"
 SSH_KEY="{args.ssh_key}"
 PROJECT_ROOT="{args.project_root}"
 ANSIBLE_DIR="$PROJECT_ROOT/ansible"
-generate_inventory_and_sshconfig \
-    "{proxy_fip}" "{bastion_fip}" \
-    "{proxy_priv}" "{bastion_priv}" \
+generate_inventory_and_sshconfig \\
+    "{proxy_fip}" "{bastion_fip}" \\
+    "{proxy_priv}" "{bastion_priv}" \\
     {json.dumps(node_priv_json)} {json.dumps(node_names_json)}
 '''
     subprocess.run(["bash", "-c", helper], check=True)
+
+    wait_for_ssh(args.project_root, args.tag)
 
     log("Running Ansible playbook")
     run(["ansible-playbook", "playbook.yml"],
