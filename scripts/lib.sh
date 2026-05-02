@@ -100,6 +100,28 @@ _emit_ssh_host() {
     echo
 }
 
+# Block until every Host entry in the SSH config accepts an SSH connection.
+wait_for_ssh() {
+    local ssh_config="$PROJECT_ROOT/${TAG}_SSHconfig"
+    local timeout="${1:-480}"
+    local deadline=$(( $(date +%s) + timeout ))
+
+    local hosts
+    hosts=$(awk '/^Host / && $2 != "*" {print $2}' "$ssh_config")
+
+    for host in $hosts; do
+        log "  Waiting for $host"
+        while [ "$(date +%s)" -lt "$deadline" ]; do
+            if ssh -F "$ssh_config" -o ConnectTimeout=5 -o BatchMode=yes \
+                   "$host" 'echo ok' >/dev/null 2>&1; then
+                log "    $host is reachable"
+                break
+            fi
+            sleep 5
+        done
+    done
+}
+
 # Inline the ProxyCommand into the inventory so Ansible doesn't pick up
 # unrelated entries from ~/.ssh/config (e.g. a previous course project).
 generate_inventory_and_sshconfig() {
