@@ -1,12 +1,4 @@
 ---
-# Playbook for NSO Assignment 2
-# 4 plays, executed in order:
-#   1. all     — common setup (apt update, install python+flask)
-#   2. nodes   — service.py systemd unit + snmpd
-#   3. proxy   — HAProxy + iptables NAT for SNMP/UDP
-#   4. bastion — alive.py systemd unit, populated nodes.yaml
-
-# ───────── Play 1: common setup on every host ─────────
 - name: Common setup on all hosts
   hosts: all
   become: true
@@ -18,17 +10,15 @@
 
     - name: Wait for unattended-upgrades to release the apt lock
       shell: |
-        while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1            || fuser /var/lib/apt/lists/lock >/dev/null 2>&1; do
+        while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 \
+           || fuser /var/lib/apt/lists/lock >/dev/null 2>&1; do
           sleep 2
         done
       changed_when: false
 
     - name: Install base packages
       apt:
-        name:
-          - python3
-          - python3-pip
-          - python3-flask
+        name: [python3, python3-pip, python3-flask]
         state: present
         update_cache: true
         lock_timeout: 300
@@ -41,18 +31,14 @@
         group: ubuntu
         mode: '0755'
 
-# ───────── Play 2: service nodes ─────────
-- name: Configure service nodes
+- name: Service nodes
   hosts: nodes
   become: true
   tasks:
     - name: Install snmpd
-      apt:
-        name: snmpd
-        state: present
-        lock_timeout: 300
+      apt: { name: snmpd, state: present, lock_timeout: 300 }
 
-    - name: Copy service.py from local repo
+    - name: Copy service.py
       copy:
         src: ../service.py
         dest: /opt/nso/service.py
@@ -74,19 +60,11 @@
         mode: '0644'
       notify: restart snmpd
 
-    - name: Enable and start snmpd
-      systemd:
-        name: snmpd
-        enabled: true
-        state: started
-        daemon_reload: true
+    - name: Enable snmpd
+      systemd: { name: snmpd, enabled: true, state: started, daemon_reload: true }
 
-    - name: Enable and start nso-service
-      systemd:
-        name: nso-service
-        enabled: true
-        state: started
-        daemon_reload: true
+    - name: Enable nso-service
+      systemd: { name: nso-service, enabled: true, state: started, daemon_reload: true }
 
   handlers:
     - name: restart snmpd
@@ -94,16 +72,12 @@
     - name: restart nso-service
       systemd: { name: nso-service, state: restarted, daemon_reload: true }
 
-# ───────── Play 3: proxy ─────────
-- name: Configure proxy (HAProxy + UDP/SNMP NAT)
+- name: Proxy (HAProxy + UDP/SNMP NAT)
   hosts: proxy
   become: true
   tasks:
     - name: Install HAProxy
-      apt:
-        name: haproxy
-        state: present
-        lock_timeout: 300
+      apt: { name: haproxy, state: present, lock_timeout: 300 }
 
     - name: Render HAProxy config
       template:
@@ -112,22 +86,19 @@
         mode: '0644'
       notify: restart haproxy
 
-    - name: Enable and start HAProxy
-      systemd:
-        name: haproxy
-        enabled: true
-        state: started
+    - name: Enable HAProxy
+      systemd: { name: haproxy, enabled: true, state: started }
 
-    # UDP/SNMP forwarding via iptables NAT.
-    # HAProxy can't speak UDP, so we redirect proxy:6000/udp to first node:161/udp.
-    - name: Enable IPv4 forwarding (needed for DNAT)
+    # HAProxy can't speak UDP, so kernel-level NAT redirects proxy:6000/udp
+    # to the first node's snmpd on :161/udp.
+    - name: Enable IPv4 forwarding
       sysctl:
         name: net.ipv4.ip_forward
         value: '1'
         state: present
         sysctl_set: true
 
-    - name: Flush old iptables NAT rules tagged for SNMP
+    - name: Clear stale SNMP DNAT rules
       iptables:
         table: nat
         chain: PREROUTING
@@ -137,7 +108,7 @@
         state: absent
       ignore_errors: true
 
-    - name: Add iptables DNAT rule for UDP/6000 -> first node:161
+    - name: DNAT UDP/6000 to first node :161
       iptables:
         table: nat
         chain: PREROUTING
@@ -146,7 +117,7 @@
         jump: DNAT
         to_destination: "{{ hostvars[groups['nodes'][0]]['ansible_host'] }}:161"
 
-    - name: Add MASQUERADE so reply traffic comes back through proxy
+    - name: MASQUERADE return traffic
       iptables:
         table: nat
         chain: POSTROUTING
@@ -158,17 +129,14 @@
     - name: restart haproxy
       systemd: { name: haproxy, state: restarted }
 
-# ───────── Play 4: bastion ─────────
-- name: Configure bastion (alive.py + nodes.yaml)
+- name: Bastion (alive.py + nodes.yaml)
   hosts: bastion
   become: true
   tasks:
-    - name: Install ping3 via pip
-      pip:
-        name: ping3
-        executable: pip3
+    - name: Install ping3
+      pip: { name: ping3, executable: pip3 }
 
-    - name: Copy alive.py from local repo
+    - name: Copy alive.py
       copy:
         src: ../alive.py
         dest: /opt/nso/alive.py
@@ -176,7 +144,7 @@
         group: ubuntu
         mode: '0644'
 
-    - name: Generate nodes.yaml (one node IP per line)
+    - name: Generate nodes.yaml
       copy:
         dest: /opt/nso/nodes.yaml
         content: |
@@ -195,12 +163,8 @@
         mode: '0644'
       notify: restart alive
 
-    - name: Enable and start nso-alive
-      systemd:
-        name: nso-alive
-        enabled: true
-        state: started
-        daemon_reload: true
+    - name: Enable nso-alive
+      systemd: { name: nso-alive, enabled: true, state: started, daemon_reload: true }
 
   handlers:
     - name: restart alive

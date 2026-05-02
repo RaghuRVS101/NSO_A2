@@ -1,10 +1,5 @@
 #!/bin/bash
 # cleanup <openrc> <tag> <ssh_key>
-#
-# 1. terraform destroy — releases VMs, network, router, secgroups, keypair.
-# 2. Delete any floating IPs tagged with our tag.
-# 3. Remove generated config files.
-
 set -euo pipefail
 
 # shellcheck disable=SC1091
@@ -17,9 +12,8 @@ source_openrc
 log "Starting cleanup of '$TAG'"
 
 cd "$TF_DIR"
-
 if [ ! -f "terraform.tfstate" ]; then
-    log "No terraform state found — nothing to destroy from Terraform"
+    log "No terraform state — skipping destroy"
 else
     PROXY_FIP=$(terraform output -raw proxy_public_ip 2>/dev/null || echo "0.0.0.0")
     BASTION_FIP=$(terraform output -raw bastion_public_ip 2>/dev/null || echo "0.0.0.0")
@@ -38,7 +32,6 @@ fi
 
 cd "$PROJECT_ROOT"
 
-# --- release tagged floating IPs --------------------------------------
 log "Releasing floating IPs tagged '$TAG'"
 TAGGED_FIPS=$(openstack floating ip list --tags "$TAG" \
               -f value -c "Floating IP Address" 2>/dev/null || true)
@@ -52,9 +45,9 @@ else
     log "  No tagged FIPs to release"
 fi
 
-# --- remove generated files -------------------------------------------
 log "Removing generated config files"
 rm -f "$PROJECT_ROOT/${TAG}_SSHconfig"
 rm -f "$ANSIBLE_DIR/inventory.ini"
+rm -f "$TF_DIR/terraform.tfstate" "$TF_DIR/terraform.tfstate.backup"
 
 log "Cleanup complete"
