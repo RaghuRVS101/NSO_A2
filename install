@@ -1,13 +1,5 @@
 #!/bin/bash
 # install <openrc> <tag> <ssh_key>
-#
-# 1. Parse args + source openrc.
-# 2. Reserve 2 floating IPs (reuse existing unassigned ones first).
-# 3. Run terraform apply with node_count from servers.conf.
-# 4. Generate Ansible inventory + SSH config from terraform output.
-# 5. Wait for VMs to be SSH-reachable.
-# 6. Run ansible-playbook to install service.py, snmpd, HAProxy, alive.
-
 set -euo pipefail
 
 # shellcheck disable=SC1091
@@ -22,8 +14,7 @@ log "Starting deployment of '$TAG'"
 NODE_COUNT=$(read_desired_count)
 log "servers.conf says we need $NODE_COUNT node(s)"
 
-# If terraform state already has FIPs from a previous install run, reuse them.
-# Otherwise, query OpenStack for unassigned FIPs and allocate new ones if needed.
+# Reuse FIPs from a previous deployment if terraform state still has them.
 PROXY_FIP=""
 BASTION_FIP=""
 if [ -f "$TF_DIR/terraform.tfstate" ]; then
@@ -33,7 +24,7 @@ fi
 
 if [ -n "$PROXY_FIP" ] && [ -n "$BASTION_FIP" ] \
    && [ "$PROXY_FIP" != "0.0.0.0" ] && [ "$BASTION_FIP" != "0.0.0.0" ]; then
-    log "Reusing FIPs from previous deployment: proxy=$PROXY_FIP bastion=$BASTION_FIP"
+    log "Reusing FIPs from terraform state: proxy=$PROXY_FIP bastion=$BASTION_FIP"
 else
     log "Checking floating IPs"
     mapfile -t FIPS < <(ensure_two_floating_ips "External")
@@ -71,31 +62,14 @@ generate_inventory_and_sshconfig \
     "$PROXY_IP" "$BASTION_IP" "$PROXY_PRIV" "$BASTION_PRIV" \
     "$NODE_PRIV_JSON" "$NODE_NAMES_JSON"
 
-# --- wait for SSH on every host -------------------------------------
-log "Waiting for VMs to become SSH-reachable (max 8 min)"
-SSH_CONFIG="$PROJECT_ROOT/${TAG}_SSHconfig"
+log "Waiting for VMs to become SSH-reachable"
+wait_for_ssh 480
 
-# Build the host list from the SSH config (all "Host xxx" entries).
-HOSTS=$(awk '/^Host / && $2 != "*" {print $2}' "$SSH_CONFIG")
-
-deadline=$(( $(date +%s) + 480 ))
-for host in $HOSTS; do
-    log "  Waiting for $host"
-    while [ "$(date +%s)" -lt "$deadline" ]; do
-        if ssh -F "$SSH_CONFIG" -o ConnectTimeout=5 -o BatchMode=yes \
-               "$host" 'echo ok' >/dev/null 2>&1; then
-            log "    $host is reachable"
-            break
-        fi
-        sleep 5
-    done
-done
-
-# --- run the playbook ------------------------------------------------
 log "Running Ansible playbook"
 cd "$ANSIBLE_DIR"
 ansible-playbook playbook.yml
 
+SSH_CONFIG="$PROJECT_ROOT/${TAG}_SSHconfig"
 log "Deployment complete"
 log "  Service:  http://$PROXY_IP:5000/"
 log "  SNMP:     udp://$PROXY_IP:6000  (snmpwalk -v2c -c public $PROXY_IP:6000 system)"
