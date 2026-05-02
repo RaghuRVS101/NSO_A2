@@ -1,8 +1,6 @@
 #!/bin/bash
-# scripts/lib.sh — shared helpers for install / operate / cleanup.
-# This file is sourced, not executed.
+# Shared helpers for install / operate / cleanup. Source this; do not execute.
 
-# --- argument parsing ---------------------------------------------------
 parse_args() {
     if [ $# -ne 3 ]; then
         echo "Usage: $0 <openrc> <tag> <ssh_key>" >&2
@@ -12,12 +10,11 @@ parse_args() {
     TAG="$2"
     SSH_KEY=$(readlink -f "$3")
 
-    [ -f "$OPENRC" ]      || { echo "openrc not found: $OPENRC" >&2; exit 1; }
-    [ -f "$SSH_KEY" ]     || { echo "ssh private key not found: $SSH_KEY" >&2; exit 1; }
+    [ -f "$OPENRC" ]        || { echo "openrc not found: $OPENRC" >&2; exit 1; }
+    [ -f "$SSH_KEY" ]       || { echo "ssh private key not found: $SSH_KEY" >&2; exit 1; }
     [ -f "${SSH_KEY}.pub" ] || { echo "ssh public key not found: ${SSH_KEY}.pub" >&2; exit 1; }
 }
 
-# --- locate project root -----------------------------------------------
 locate_project_root() {
     PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[1]}")" && pwd)"
     TF_DIR="$PROJECT_ROOT/terraform"
@@ -25,15 +22,15 @@ locate_project_root() {
     SCRIPTS_DIR="$PROJECT_ROOT/scripts"
 }
 
-# --- timestamped logging -----------------------------------------------
 log() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') $*"
 }
 
-# --- source openrc -----------------------------------------------------
+# Reuse credentials from the shell if openrc was already sourced; otherwise
+# source the file (which will prompt for the password).
 source_openrc() {
     if [ -n "${OS_PASSWORD:-}" ] && [ -n "${OS_AUTH_URL:-}" ]; then
-        log "OpenStack credentials already in environment — reusing them"
+        log "OpenStack credentials already in environment"
         return 0
     fi
     log "Sourcing openrc: $OPENRC"
@@ -46,12 +43,13 @@ source_openrc() {
         exit 1
     fi
     if [ -z "${OS_PASSWORD:-}" ]; then
-        echo "OS_PASSWORD is empty after sourcing openrc — did you type it?" >&2
+        echo "OS_PASSWORD is empty after sourcing openrc" >&2
         exit 1
     fi
 }
 
-# --- ensure two floating IPs (reuse if possible) -----------------------
+# Reuse any unassigned floating IPs in the project before allocating new ones.
+# Newly-allocated IPs get tagged with $TAG so cleanup can find them.
 ensure_two_floating_ips() {
     local pool="${1:-External}"
 
@@ -64,82 +62,70 @@ ensure_two_floating_ips() {
         [ -n "$ip" ] && fips+=("$ip")
     done <<< "$unused"
 
-    log "Found ${#fips[@]} unassigned floating IP(s) in project" >&2
+    log "Found ${#fips[@]} unassigned floating IP(s)" >&2
 
     while [ ${#fips[@]} -lt 2 ]; do
-        log "Allocating new floating IP from pool '$pool'" >&2
         local new
         new=$(openstack floating ip create "$pool" --tag "$TAG" \
               -f value -c floating_ip_address)
         fips+=("$new")
-        log "Allocated $new (tagged $TAG)" >&2
+        log "Allocated $new" >&2
     done
 
     printf '%s\n' "${fips[0]}" "${fips[1]}"
 }
 
-# --- read desired node count from servers.conf ------------------------
 read_desired_count() {
     local conf="$PROJECT_ROOT/servers.conf"
     [ -f "$conf" ] || { echo "servers.conf not found at $conf" >&2; exit 1; }
     grep -v '^#' "$conf" | grep -v '^[[:space:]]*$' | head -n1 | awk '{print $1}'
 }
 
-# --- generate ansible/inventory.ini and SSH config from terraform output -
-# All hosts get ansible_ssh_common_args inline so we don't depend on
-# ~/.ssh/config (which may have entries from prior projects).
+# Decode a JSON array of strings (from `terraform output -json`) into a
+# newline-separated list of values.
+_json_array_to_lines() {
+    python3 -c 'import json,sys;print("\n".join(json.load(sys.stdin)))'
+}
+
+_emit_ssh_host() {
+    local name="$1" host="$2" with_jump="$3"
+    echo "Host $name"
+    echo "    HostName $host"
+    echo "    User ubuntu"
+    echo "    IdentityFile $SSH_KEY"
+    echo "    StrictHostKeyChecking no"
+    echo "    UserKnownHostsFile /dev/null"
+    echo "    LogLevel ERROR"
+    [ "$with_jump" = "yes" ] && echo "    ProxyJump ${TAG}_bastion"
+    echo
+}
+
+# Inline the ProxyCommand into the inventory so Ansible doesn't pick up
+# unrelated entries from ~/.ssh/config (e.g. a previous course project).
 generate_inventory_and_sshconfig() {
-    local proxy_pub="$1"
-    local bastion_pub="$2"
-    local proxy_priv="$3"
-    local bastion_priv="$4"
-    local node_priv_json="$5"
-    local node_names_json="$6"
+    local proxy_pub="$1" bastion_pub="$2"
+    local proxy_priv="$3" bastion_priv="$4"
+    local node_priv_json="$5" node_names_json="$6"
 
     local ssh_config="$PROJECT_ROOT/${TAG}_SSHconfig"
     local inventory="$ANSIBLE_DIR/inventory.ini"
 
-    # The ProxyCommand string used for proxy + nodes (private hosts).
-    local jump="-o ProxyCommand='ssh -F none -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i ${SSH_KEY} -W %h:%p ubuntu@${bastion_pub}'"
     local common="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+    local jump="-o ProxyCommand='ssh -F none ${common} -i ${SSH_KEY} -W %h:%p ubuntu@${bastion_pub}'"
+
+    local privs names
+    privs=$(echo "$node_priv_json"  | _json_array_to_lines)
+    names=$(echo "$node_names_json" | _json_array_to_lines)
 
     log "Writing SSH config to $ssh_config"
     {
-        echo "# Generated by install — do not edit"
+        echo "# Generated by install"
         echo
-        echo "Host ${TAG}_bastion"
-        echo "    HostName $bastion_pub"
-        echo "    User ubuntu"
-        echo "    IdentityFile $SSH_KEY"
-        echo "    StrictHostKeyChecking no"
-        echo "    UserKnownHostsFile /dev/null"
-        echo "    LogLevel ERROR"
-        echo
-        echo "Host ${TAG}_proxy"
-        echo "    HostName $proxy_priv"
-        echo "    User ubuntu"
-        echo "    IdentityFile $SSH_KEY"
-        echo "    StrictHostKeyChecking no"
-        echo "    UserKnownHostsFile /dev/null"
-        echo "    LogLevel ERROR"
-        echo "    ProxyJump ${TAG}_bastion"
-        echo
-
-        local privs names
-        privs=$(echo "$node_priv_json"  | python3 -c 'import json,sys;print("\n".join(json.load(sys.stdin)))')
-        names=$(echo "$node_names_json" | python3 -c 'import json,sys;print("\n".join(json.load(sys.stdin)))')
-
+        _emit_ssh_host "${TAG}_bastion" "$bastion_pub" no
+        _emit_ssh_host "${TAG}_proxy"   "$proxy_priv"  yes
         paste <(echo "$names") <(echo "$privs") | while IFS=$'\t' read -r name ip; do
             [ -z "$name" ] && continue
-            echo "Host $name"
-            echo "    HostName $ip"
-            echo "    User ubuntu"
-            echo "    IdentityFile $SSH_KEY"
-            echo "    StrictHostKeyChecking no"
-            echo "    UserKnownHostsFile /dev/null"
-            echo "    LogLevel ERROR"
-            echo "    ProxyJump ${TAG}_bastion"
-            echo
+            _emit_ssh_host "$name" "$ip" yes
         done
     } > "$ssh_config"
 
@@ -152,11 +138,6 @@ generate_inventory_and_sshconfig() {
         echo "${TAG}_proxy ansible_host=${proxy_priv} ansible_ssh_common_args=\"${common} ${jump}\""
         echo
         echo "[nodes]"
-
-        local privs names
-        privs=$(echo "$node_priv_json"  | python3 -c 'import json,sys;print("\n".join(json.load(sys.stdin)))')
-        names=$(echo "$node_names_json" | python3 -c 'import json,sys;print("\n".join(json.load(sys.stdin)))')
-
         paste <(echo "$names") <(echo "$privs") | while IFS=$'\t' read -r name ip; do
             [ -z "$name" ] && continue
             echo "${name} ansible_host=${ip} ansible_ssh_common_args=\"${common} ${jump}\""
