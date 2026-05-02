@@ -25,3 +25,9 @@ venv/
 .vscode/
 .idea/
 *.swp
+
+# Benchmark results (raw ab output)
+benchmarks/
+
+# Benchmark results (raw ab output)
+benchmarks/
