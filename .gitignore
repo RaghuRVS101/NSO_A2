@@ -31,3 +31,4 @@ benchmarks/
 
 # Benchmark results (raw ab output)
 benchmarks/
+terraform/terraform.tfstate.stale-*
