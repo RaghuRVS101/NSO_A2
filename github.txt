@@ -1,0 +1,4 @@
+origin	https://github.com/RaghuRVS101/NSO_A2.git (fetch)
+origin	https://github.com/RaghuRVS101/NSO_A2.git (push)
+upstream	https://github.com/patrikarlos/NSO_A2.git (fetch)
+upstream	https://github.com/patrikarlos/NSO_A2.git (push)
