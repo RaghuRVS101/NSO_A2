@@ -1,12 +1,5 @@
 #!/bin/bash
 # operate <openrc> <tag> <ssh_key>
-#
-# Loops until Ctrl-C:
-#   - read servers.conf -> desired count
-#   - count current nodes (filtered by tag)
-#   - if mismatch, terraform apply with new count + re-run playbook
-#   - sleep 30s
-
 set -euo pipefail
 
 # shellcheck disable=SC1091
@@ -17,8 +10,7 @@ locate_project_root
 source_openrc
 
 if [ ! -f "$TF_DIR/terraform.tfstate" ]; then
-    echo "No terraform state found at $TF_DIR/terraform.tfstate" >&2
-    echo "Run install first." >&2
+    echo "No terraform state at $TF_DIR/terraform.tfstate. Run install first." >&2
     exit 1
 fi
 
