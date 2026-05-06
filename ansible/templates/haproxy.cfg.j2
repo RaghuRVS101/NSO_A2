@@ -30,11 +30,4 @@ backend service_nodes
     server {{ host }} {{ hostvars[host]['ansible_host'] }}:5000 check
 {% endfor %}
 
-# SNMP — UDP/6000 simple forward to first node (real UDP LB needs nftables)
-# We forward, not balance, because HAProxy speaks TCP only. The assignment
-# says "balance" but for SNMP a single-target forward is acceptable for E grade.
-frontend snmp_in
-    bind *:6000
-    mode tcp
-    # Note: HAProxy can't actually serve UDP. We rely on iptables/nftables
-    # rules added in the play to redirect UDP/6000 to the first node:161.
+

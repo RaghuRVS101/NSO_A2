@@ -42,17 +42,17 @@ variable "image_name" {
 variable "flavor_name" {
   type        = string
   description = "VM flavor/size"
-  default     = "tiny"
+  default     = "2C-2GB-20GB"
 }
 
 variable "external_network" {
   type        = string
   description = "External network name for floating IPs"
-  default     = "External"
+  default     = "ext-net"
 }
 
 variable "dns_nameserver" {
   type        = string
   description = "DNS nameserver for subnet"
-  default     = "10.241.1.10"
+  default     = "1.1.1.1"
 }

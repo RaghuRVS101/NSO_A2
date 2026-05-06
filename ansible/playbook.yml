@@ -72,62 +72,56 @@
     - name: restart nso-service
       systemd: { name: nso-service, state: restarted, daemon_reload: true }
 
-- name: Proxy (HAProxy + UDP/SNMP NAT)
+- name: Proxy (HAProxy for TCP + NGINX for UDP/SNMP)
   hosts: proxy
   become: true
   tasks:
-    - name: Install HAProxy
-      apt: { name: haproxy, state: present, lock_timeout: 300 }
+    - name: Install HAProxy, NGINX and NGINX stream module
+      apt:
+        name:
+          - haproxy
+          - nginx
+          - libnginx-mod-stream
+        state: present
+        update_cache: true
+        lock_timeout: 300
 
-    - name: Render HAProxy config
+    - name: Render HAProxy config for service.py TCP/5000
       template:
         src: haproxy.cfg.j2
         dest: /etc/haproxy/haproxy.cfg
         mode: '0644'
       notify: restart haproxy
 
+    - name: Render NGINX config for SNMP UDP/6000
+      template:
+        src: nginx.conf.j2
+        dest: /etc/nginx/nginx.conf
+        mode: '0644'
+      notify: restart nginx
+
     - name: Enable HAProxy
-      systemd: { name: haproxy, enabled: true, state: started }
+      systemd:
+        name: haproxy
+        enabled: true
+        state: started
 
-    # HAProxy can't speak UDP, so kernel-level NAT redirects proxy:6000/udp
-    # to the first node's snmpd on :161/udp.
-    - name: Enable IPv4 forwarding
-      sysctl:
-        name: net.ipv4.ip_forward
-        value: '1'
-        state: present
-        sysctl_set: true
-
-    - name: Clear stale SNMP DNAT rules
-      iptables:
-        table: nat
-        chain: PREROUTING
-        protocol: udp
-        destination_port: '6000'
-        jump: DNAT
-        state: absent
-      ignore_errors: true
-
-    - name: DNAT UDP/6000 to first node :161
-      iptables:
-        table: nat
-        chain: PREROUTING
-        protocol: udp
-        destination_port: '6000'
-        jump: DNAT
-        to_destination: "{{ hostvars[groups['nodes'][0]]['ansible_host'] }}:161"
-
-    - name: MASQUERADE return traffic
-      iptables:
-        table: nat
-        chain: POSTROUTING
-        protocol: udp
-        destination_port: '161'
-        jump: MASQUERADE
+    - name: Enable NGINX
+      systemd:
+        name: nginx
+        enabled: true
+        state: started
 
   handlers:
     - name: restart haproxy
-      systemd: { name: haproxy, state: restarted }
+      systemd:
+        name: haproxy
+        state: restarted
+
+    - name: restart nginx
+      systemd:
+        name: nginx
+        state: restarted
 
 - name: Bastion (alive.py + nodes.yaml)
   hosts: bastion

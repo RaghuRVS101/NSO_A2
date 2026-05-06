@@ -14,6 +14,13 @@ log "Starting deployment of '$TAG'"
 NODE_COUNT=$(read_desired_count)
 log "servers.conf says we need $NODE_COUNT node(s)"
 
+EXT_NET="ext-net"
+
+if ! openstack network show "$EXT_NET" >/dev/null 2>&1; then
+    log "External network $EXT_NET not found, falling back to External"
+    EXT_NET="External"
+fi
+
 # Reuse FIPs from a previous deployment if terraform state still has them.
 PROXY_FIP=""
 BASTION_FIP=""
@@ -27,7 +34,8 @@ if [ -n "$PROXY_FIP" ] && [ -n "$BASTION_FIP" ] \
     log "Reusing FIPs from terraform state: proxy=$PROXY_FIP bastion=$BASTION_FIP"
 else
     log "Checking floating IPs"
-    mapfile -t FIPS < <(ensure_two_floating_ips "External")
+
+    mapfile -t FIPS < <(ensure_two_floating_ips "$EXT_NET")
     PROXY_FIP="${FIPS[0]}"
     BASTION_FIP="${FIPS[1]}"
     log "Using proxy FIP:   $PROXY_FIP"
@@ -41,11 +49,21 @@ if [ ! -d ".terraform" ]; then
     terraform init -input=false
 fi
 
+FLAVOR="2C-2GB-20GB"
+
+if ! openstack flavor show "$FLAVOR" >/dev/null 2>&1; then
+    log "Flavor $FLAVOR not found, falling back to tiny"
+    FLAVOR="tiny"
+fi
+
 log "Running terraform apply"
 terraform apply -auto-approve -input=false \
     -var "tag=$TAG" \
     -var "ssh_public_key=${SSH_KEY}.pub" \
     -var "node_count=$NODE_COUNT" \
+    -var "flavor_name=$FLAVOR" \
+    -var "external_network=$EXT_NET" \
+    -var "dns_nameserver=1.1.1.1" \
     -var "proxy_floating_ip=$PROXY_FIP" \
     -var "bastion_floating_ip=$BASTION_FIP"
 

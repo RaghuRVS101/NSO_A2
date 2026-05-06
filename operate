@@ -10,9 +10,25 @@ locate_project_root
 source_openrc
 
 if [ ! -f "$TF_DIR/terraform.tfstate" ]; then
-    echo "No terraform state at $TF_DIR/terraform.tfstate. Run install first." >&2
+    echo "No terraform state at $TF_DIR/terraform.tfstate. Run install first."
     exit 1
 fi
+
+FLAVOR="2C-2GB-20GB"
+if ! openstack flavor show "$FLAVOR" >/dev/null 2>&1; then
+    log "Flavor $FLAVOR not found, falling back to tiny"
+    FLAVOR="tiny"
+fi
+
+EXT_NET="ext-net"
+if ! openstack network show "$EXT_NET" >/dev/null 2>&1; then
+    log "External network $EXT_NET not found, falling back to External"
+    EXT_NET="External"
+fi
+
+export NSO_FLAVOR="$FLAVOR"
+export NSO_EXTERNAL_NETWORK="$EXT_NET"
+export NSO_DNS_NAMESERVER="1.1.1.1"
 
 log "Starting operate loop for '$TAG' (Ctrl-C to stop)"
 

@@ -51,7 +51,7 @@ source_openrc() {
 # Reuse any unassigned floating IPs in the project before allocating new ones.
 # Newly-allocated IPs get tagged with $TAG so cleanup can find them.
 ensure_two_floating_ips() {
-    local pool="${1:-External}"
+    local pool="${1:-ext-net}"
 
     local unused
     unused=$(openstack floating ip list -f value -c "Floating IP Address" -c "Port" \
